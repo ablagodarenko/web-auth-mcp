@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/web_auth_mcp/__init__.py
+src/web_auth_mcp/auth_handler.py
+src/web_auth_mcp/config.py
+src/web_auth_mcp/http_client.py
+src/web_auth_mcp/server.py
+src/web_auth_mcp.egg-info/PKG-INFO
+src/web_auth_mcp.egg-info/SOURCES.txt
+src/web_auth_mcp.egg-info/dependency_links.txt
+src/web_auth_mcp.egg-info/entry_points.txt
+src/web_auth_mcp.egg-info/requires.txt
+src/web_auth_mcp.egg-info/top_level.txt
+tests/test_auth_handler.py
+tests/test_http_client.py

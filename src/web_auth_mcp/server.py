@@ -9,12 +9,18 @@ import asyncio
 import json
 import logging
 import os
+import sys
 from typing import Any, Dict, List, Optional, Sequence
 
 from dotenv import load_dotenv
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
+from mcp.server.sse import SseServerTransport
+from starlette.applications import Starlette
+from starlette.routing import Route
+from starlette.responses import Response
+import uvicorn
 from mcp.types import (
     CallToolRequest,
     CallToolResult,
@@ -177,10 +183,10 @@ class WebAuthMCPServer:
                 }, indent=2)
             )]
     
-    async def run(self):
-        """Run the MCP server."""
-        logger.info("Starting Web Auth MCP Server")
-        
+    async def run_stdio(self):
+        """Run the MCP server with stdio transport."""
+        logger.info("Starting Web Auth MCP Server (stdio)")
+
         async with stdio_server() as (read_stream, write_stream):
             await self.server.run(
                 read_stream,
@@ -195,16 +201,88 @@ class WebAuthMCPServer:
                 ),
             )
 
+    def create_sse_app(self):
+        """Create Starlette app for SSE transport."""
+        # Create the transport with the message endpoint
+        transport = SseServerTransport("/message")
+
+        # Create the ASGI app using the transport
+        async def asgi_app(scope, receive, send):
+            if scope["type"] == "http":
+                path = scope["path"]
+
+                if path == "/sse":
+                    # Handle SSE endpoint
+                    async with transport.connect_sse(
+                        scope, receive, send
+                    ) as streams:
+                        await self.server.run(
+                            *streams,
+                            InitializationOptions(
+                                server_name="web-auth-mcp",
+                                server_version="0.1.0",
+                                capabilities=self.server.get_capabilities(
+                                    notification_options=NotificationOptions(),
+                                    experimental_capabilities=None,
+                                ),
+                            )
+                        )
+                elif path == "/message":
+                    # Handle message endpoint
+                    await transport.handle_post_message(scope, receive, send)
+                else:
+                    # 404 for other paths
+                    await send({
+                        'type': 'http.response.start',
+                        'status': 404,
+                        'headers': [[b'content-type', b'text/plain']],
+                    })
+                    await send({
+                        'type': 'http.response.body',
+                        'body': b'Not Found',
+                    })
+
+        return asgi_app
+
+    async def run_http(self, host: str = "0.0.0.0", port: int = 8080):
+        """Run the MCP server with HTTP/SSE transport."""
+        logger.info(f"Starting Web Auth MCP Server (HTTP) on {host}:{port}")
+        asgi_app = self.create_sse_app()
+
+        config = uvicorn.Config(
+            app=asgi_app,
+            host=host,
+            port=port,
+            log_level="info"
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
 
 async def async_main():
     """Async main entry point."""
     server = WebAuthMCPServer()
-    await server.run()
+
+    # Check command line arguments for transport mode
+    if len(sys.argv) > 1 and sys.argv[1] == "--http":
+        # HTTP/SSE mode
+        host = sys.argv[2] if len(sys.argv) > 2 else "0.0.0.0"
+        port = int(sys.argv[3]) if len(sys.argv) > 3 else 8080
+        await server.run_http(host, port)
+    else:
+        # Default stdio mode
+        await server.run_stdio()
 
 
 def main():
     """Synchronous main entry point for console script."""
     asyncio.run(async_main())
+
+
+def main_http():
+    """Entry point for HTTP server."""
+    sys.argv = [sys.argv[0], "--http"] + sys.argv[1:]
+    main()
 
 
 if __name__ == "__main__":

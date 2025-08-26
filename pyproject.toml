@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 web-auth-mcp = "web_auth_mcp.server:main"
+web-auth-mcp-http = "web_auth_mcp.server:main_http"
 
 [tool.setuptools.packages.find]
 where = ["src"]
