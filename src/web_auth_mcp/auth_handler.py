@@ -1,0 +1,278 @@
+"""Authentication handler with browser automation."""
+
+import asyncio
+import json
+import logging
+import os
+import re
+import time
+from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin, urlparse
+
+import httpx
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
+
+logger = logging.getLogger(__name__)
+
+
+class AuthHandler:
+    """Handles authentication detection and browser-based authentication flows."""
+    
+    def __init__(self):
+        self.browser_timeout = int(os.getenv("BROWSER_TIMEOUT", "30"))
+        self.headless = os.getenv("BROWSER_HEADLESS", "true").lower() == "true"
+        self.window_size = os.getenv("BROWSER_WINDOW_SIZE", "1920x1080")
+        self.auth_cache = {}
+        self.cache_ttl = int(os.getenv("AUTH_CACHE_TTL", "3600"))
+    
+    def needs_authentication(self, response: httpx.Response) -> bool:
+        """
+        Determine if a response indicates authentication is required.
+        
+        Args:
+            response: HTTP response to check
+            
+        Returns:
+            True if authentication is needed
+        """
+        # Check status codes
+        if response.status_code in [401, 403]:
+            logger.debug(f"Authentication required: status {response.status_code}")
+            return True
+        
+        # Check for redirect to login page
+        if response.status_code in [302, 303, 307, 308]:
+            location = response.headers.get("location", "")
+            if self._is_login_redirect(location):
+                logger.debug(f"Authentication required: redirect to {location}")
+                return True
+        
+        # Check response content for authentication indicators
+        if self._contains_auth_indicators(response.text):
+            logger.debug("Authentication required: content indicators")
+            return True
+        
+        # Check WWW-Authenticate header
+        if "www-authenticate" in response.headers:
+            logger.debug("Authentication required: WWW-Authenticate header")
+            return True
+        
+        return False
+    
+    def _is_login_redirect(self, location: str) -> bool:
+        """Check if a redirect location is likely a login page."""
+        login_patterns = [
+            r"/login",
+            r"/signin",
+            r"/auth",
+            r"/oauth",
+            r"/sso",
+            r"login\.",
+            r"auth\.",
+            r"accounts\."
+        ]
+        
+        location_lower = location.lower()
+        return any(re.search(pattern, location_lower) for pattern in login_patterns)
+    
+    def _contains_auth_indicators(self, content: str) -> bool:
+        """Check if response content contains authentication indicators."""
+        if not content:
+            return False
+        
+        content_lower = content.lower()
+        
+        # Common authentication indicators
+        auth_indicators = [
+            "please log in",
+            "please sign in",
+            "authentication required",
+            "unauthorized",
+            "access denied",
+            "login required",
+            "session expired",
+            "please authenticate"
+        ]
+        
+        return any(indicator in content_lower for indicator in auth_indicators)
+    
+    async def authenticate(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Perform browser-based authentication for the given URL.
+        
+        Args:
+            url: URL that requires authentication
+            
+        Returns:
+            Authentication data (cookies, tokens, headers) or None if failed
+        """
+        domain = urlparse(url).netloc
+        
+        # Check cache first
+        cache_key = f"auth_{domain}"
+        if cache_key in self.auth_cache:
+            cached_data, timestamp = self.auth_cache[cache_key]
+            if time.time() - timestamp < self.cache_ttl:
+                logger.debug(f"Using cached authentication for {domain}")
+                return cached_data
+        
+        logger.info(f"Starting browser authentication for {domain}")
+        
+        # Set up Chrome options
+        chrome_options = Options()
+        if self.headless:
+            chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument(f"--window-size={self.window_size}")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
+        
+        driver = None
+        try:
+            # Initialize WebDriver
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            
+            # Navigate to the URL
+            driver.get(url)
+            
+            # Wait for user to complete authentication
+            auth_data = await self._wait_for_authentication(driver, url)
+            
+            if auth_data:
+                # Cache the authentication data
+                self.auth_cache[cache_key] = (auth_data, time.time())
+                logger.info(f"Authentication successful for {domain}")
+                return auth_data
+            else:
+                logger.warning(f"Authentication failed for {domain}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Browser authentication error: {e}")
+            return None
+        finally:
+            if driver:
+                driver.quit()
+    
+    async def _wait_for_authentication(
+        self, 
+        driver: webdriver.Chrome, 
+        original_url: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Wait for user to complete authentication and extract auth data.
+        
+        Args:
+            driver: WebDriver instance
+            original_url: Original URL that required authentication
+            
+        Returns:
+            Authentication data or None
+        """
+        wait = WebDriverWait(driver, self.browser_timeout)
+        
+        try:
+            # If not headless, show message to user
+            if not self.headless:
+                print(f"\n🔐 Please complete authentication in the browser window.")
+                print(f"   Original URL: {original_url}")
+                print(f"   Current URL: {driver.current_url}")
+                print(f"   Waiting up to {self.browser_timeout} seconds...\n")
+            
+            # Wait for authentication completion indicators
+            auth_completed = False
+            start_time = time.time()
+            
+            while not auth_completed and (time.time() - start_time) < self.browser_timeout:
+                current_url = driver.current_url
+                
+                # Check if we've been redirected away from login pages
+                if not self._is_login_redirect(current_url):
+                    # Try to access the original URL to verify authentication
+                    driver.get(original_url)
+                    await asyncio.sleep(2)  # Wait for page load
+                    
+                    # Check if we can access the original URL without redirect
+                    final_url = driver.current_url
+                    if not self._is_login_redirect(final_url) and final_url == original_url:
+                        auth_completed = True
+                        break
+                
+                await asyncio.sleep(1)
+            
+            if not auth_completed:
+                logger.warning("Authentication timeout")
+                return None
+            
+            # Extract authentication data
+            auth_data = self._extract_auth_data(driver)
+            return auth_data
+            
+        except Exception as e:
+            logger.error(f"Error waiting for authentication: {e}")
+            return None
+    
+    def _extract_auth_data(self, driver: webdriver.Chrome) -> Dict[str, Any]:
+        """
+        Extract authentication data from the browser session.
+        
+        Args:
+            driver: WebDriver instance
+            
+        Returns:
+            Dictionary containing authentication data
+        """
+        auth_data = {}
+        
+        # Extract cookies
+        cookies = driver.get_cookies()
+        if cookies:
+            auth_data["cookies"] = {cookie["name"]: cookie["value"] for cookie in cookies}
+        
+        # Try to extract tokens from localStorage
+        try:
+            local_storage = driver.execute_script("return window.localStorage;")
+            if local_storage:
+                # Look for common token keys
+                token_keys = ["access_token", "token", "auth_token", "jwt", "bearer_token"]
+                for key in token_keys:
+                    if key in local_storage:
+                        auth_data[key] = local_storage[key]
+        except Exception as e:
+            logger.debug(f"Could not access localStorage: {e}")
+        
+        # Try to extract tokens from sessionStorage
+        try:
+            session_storage = driver.execute_script("return window.sessionStorage;")
+            if session_storage:
+                token_keys = ["access_token", "token", "auth_token", "jwt", "bearer_token"]
+                for key in token_keys:
+                    if key in session_storage:
+                        auth_data[key] = session_storage[key]
+        except Exception as e:
+            logger.debug(f"Could not access sessionStorage: {e}")
+        
+        # Try to extract CSRF tokens from meta tags
+        try:
+            csrf_elements = driver.find_elements(By.CSS_SELECTOR, 'meta[name*="csrf"], meta[name*="token"]')
+            for element in csrf_elements:
+                name = element.get_attribute("name")
+                content = element.get_attribute("content")
+                if name and content and "csrf" in name.lower():
+                    auth_data["csrf_token"] = content
+                    break
+        except Exception as e:
+            logger.debug(f"Could not extract CSRF token: {e}")
+        
+        logger.debug(f"Extracted auth data keys: {list(auth_data.keys())}")
+        return auth_data

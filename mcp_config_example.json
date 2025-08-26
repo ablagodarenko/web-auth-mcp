@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "web-auth-mcp": {
+      "command": "python",
+      "args": ["-m", "web_auth_mcp.server"],
+      "env": {
+        "BROWSER_HEADLESS": "false",
+        "BROWSER_TIMEOUT": "60",
+        "AUTH_CACHE_TTL": "3600",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
