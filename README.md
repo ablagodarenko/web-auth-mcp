@@ -165,3 +165,33 @@ The server uses Selenium WebDriver with Chrome to handle authentication:
 - Extracts tokens from localStorage, sessionStorage, and cookies
 - Handles CSRF tokens from meta tags
 - Configurable timeouts and window sizes
+
+## Troubleshooting
+
+### Browser Issues
+
+**Browser doesn't open:**
+- Check that `BROWSER_HEADLESS=false` (default)
+- Ensure Chrome is installed on your system
+
+**Browser opens but doesn't close:**
+- The server detects authentication completion automatically
+- Wait for the success message: "✅ Authentication completed successfully!"
+- If stuck, check that you've completed the login process fully
+
+**Authentication timeout:**
+- Increase timeout: `BROWSER_TIMEOUT=120` (default: 60 seconds)
+- Ensure you complete authentication within the timeout period
+
+### Common Solutions
+
+```bash
+# Force visible browser
+export BROWSER_HEADLESS=false
+
+# Increase timeout
+export BROWSER_TIMEOUT=120
+
+# Debug mode
+export LOG_LEVEL=DEBUG
+```

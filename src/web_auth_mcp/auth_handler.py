@@ -197,32 +197,85 @@ class AuthHandler:
             # Wait for authentication completion indicators
             auth_completed = False
             start_time = time.time()
-            
+            last_url = driver.current_url
+            stable_url_count = 0
+
             while not auth_completed and (time.time() - start_time) < self.browser_timeout:
                 current_url = driver.current_url
-                
-                # Check if we've been redirected away from login pages
-                if not self._is_login_redirect(current_url):
-                    # Try to access the original URL to verify authentication
-                    driver.get(original_url)
-                    await asyncio.sleep(2)  # Wait for page load
-                    
-                    # Check if we can access the original URL without redirect
-                    final_url = driver.current_url
-                    if not self._is_login_redirect(final_url) and final_url == original_url:
-                        auth_completed = True
-                        break
-                
+
+                # Check if URL has been stable (not changing)
+                if current_url == last_url:
+                    stable_url_count += 1
+                else:
+                    stable_url_count = 0
+                    last_url = current_url
+
+                # Check multiple indicators for successful authentication
+                auth_indicators = [
+                    # Not on a login page
+                    not self._is_login_redirect(current_url),
+                    # URL has been stable for a few seconds
+                    stable_url_count >= 3,
+                    # Check for success indicators in page content
+                    self._check_auth_success_indicators(driver),
+                    # Check if we're on a content page (not login/error)
+                    self._is_content_page(current_url)
+                ]
+
+                # If multiple indicators suggest success, verify by testing original URL
+                if sum(auth_indicators) >= 2:
+                    logger.debug("Authentication indicators suggest success, verifying...")
+
+                    # Test access to original URL in a new tab to avoid disrupting current session
+                    original_window = driver.current_window_handle
+                    driver.execute_script("window.open('');")
+                    driver.switch_to.window(driver.window_handles[-1])
+
+                    try:
+                        driver.get(original_url)
+                        await asyncio.sleep(3)  # Wait for page load
+
+                        test_url = driver.current_url
+                        page_source = driver.page_source.lower()
+
+                        # Check if we successfully accessed the content
+                        success_indicators = [
+                            not self._is_login_redirect(test_url),
+                            not self._contains_auth_indicators(page_source),
+                            len(page_source) > 1000,  # Substantial content
+                            "content" in page_source or "article" in page_source
+                        ]
+
+                        if sum(success_indicators) >= 3:
+                            auth_completed = True
+                            logger.info("Authentication verification successful")
+                            break
+                        else:
+                            logger.debug("Authentication verification failed, continuing to wait")
+
+                    except Exception as e:
+                        logger.debug(f"Error during authentication verification: {e}")
+                    finally:
+                        # Close test tab and return to original
+                        driver.close()
+                        driver.switch_to.window(original_window)
+
                 await asyncio.sleep(1)
             
             if not auth_completed:
                 logger.warning("Authentication timeout")
                 return None
-            
+
             # Extract authentication data
             auth_data = self._extract_auth_data(driver)
+
+            # Show success message
+            if not self.headless:
+                print("✅ Authentication completed successfully!")
+                print("   Closing browser and continuing with request...\n")
+
             return auth_data
-            
+
         except Exception as e:
             logger.error(f"Error waiting for authentication: {e}")
             return None
@@ -281,3 +334,54 @@ class AuthHandler:
         
         logger.debug(f"Extracted auth data keys: {list(auth_data.keys())}")
         return auth_data
+
+    def _check_auth_success_indicators(self, driver) -> bool:
+        """Check if the current page indicates successful authentication."""
+        try:
+            page_source = driver.page_source.lower()
+
+            # Look for success indicators
+            success_indicators = [
+                "dashboard" in page_source,
+                "welcome" in page_source,
+                "profile" in page_source,
+                "account" in page_source,
+                "logout" in page_source,
+                "sign out" in page_source,
+                "my library" in page_source,
+                "bookmarks" in page_source
+            ]
+
+            return any(indicator for indicator in success_indicators)
+
+        except Exception as e:
+            logger.debug(f"Error checking auth success indicators: {e}")
+            return False
+
+    def _is_content_page(self, url: str) -> bool:
+        """Check if URL appears to be a content page rather than auth/error page."""
+        if not url:
+            return False
+
+        url_lower = url.lower()
+
+        # Content page indicators
+        content_indicators = [
+            "/library/" in url_lower,
+            "/book/" in url_lower,
+            "/chapter/" in url_lower,
+            "/article/" in url_lower,
+            "/view/" in url_lower,
+            "/content/" in url_lower
+        ]
+
+        # Auth/error page indicators (should not be present)
+        auth_indicators = [
+            "/login" in url_lower,
+            "/signin" in url_lower,
+            "/auth" in url_lower,
+            "/error" in url_lower,
+            "/denied" in url_lower
+        ]
+
+        return any(content_indicators) and not any(auth_indicators)
