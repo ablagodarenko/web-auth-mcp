@@ -36,8 +36,9 @@ class TestHttpClient:
         """Test HTTP request with custom headers."""
         with patch.object(self.http_client.client, 'request') as mock_request:
             mock_response = Mock(spec=httpx.Response)
+            mock_response.status_code = 200
             mock_request.return_value = mock_response
-            
+
             headers = {"User-Agent": "Test"}
             await self.http_client.request("GET", "https://example.com", headers=headers)
             
@@ -52,8 +53,9 @@ class TestHttpClient:
         """Test HTTP request with body."""
         with patch.object(self.http_client.client, 'request') as mock_request:
             mock_response = Mock(spec=httpx.Response)
+            mock_response.status_code = 200
             mock_request.return_value = mock_response
-            
+
             body = '{"test": "data"}'
             await self.http_client.request("POST", "https://example.com", body=body)
             
@@ -69,13 +71,14 @@ class TestHttpClient:
         """Test HTTP request with authentication data."""
         with patch.object(self.http_client.client, 'request') as mock_request:
             mock_response = Mock(spec=httpx.Response)
+            mock_response.status_code = 200
             mock_request.return_value = mock_response
-            
+
             auth_data = {
                 "access_token": "test_token",
                 "cookies": {"session": "abc123"}
             }
-            
+
             await self.http_client.request("GET", "https://example.com", auth_data=auth_data)
             
             mock_request.assert_called_once_with(

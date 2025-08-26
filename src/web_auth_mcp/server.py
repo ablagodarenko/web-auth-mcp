@@ -12,7 +12,7 @@ import os
 from typing import Any, Dict, List, Optional, Sequence
 
 from dotenv import load_dotenv
-from mcp.server import Server
+from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -189,7 +189,7 @@ class WebAuthMCPServer:
                     server_name="web-auth-mcp",
                     server_version="0.1.0",
                     capabilities=self.server.get_capabilities(
-                        notification_options=None,
+                        notification_options=NotificationOptions(),
                         experimental_capabilities=None,
                     ),
                 ),
