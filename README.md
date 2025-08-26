@@ -111,8 +111,8 @@ python example_usage.py
 Create a `.env` file with optional configuration:
 
 ```
-BROWSER_HEADLESS=true
-BROWSER_TIMEOUT=30
+BROWSER_HEADLESS=false
+BROWSER_TIMEOUT=60
 AUTH_CACHE_TTL=3600
 ```
 

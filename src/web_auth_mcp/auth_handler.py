@@ -25,8 +25,8 @@ class AuthHandler:
     """Handles authentication detection and browser-based authentication flows."""
     
     def __init__(self):
-        self.browser_timeout = int(os.getenv("BROWSER_TIMEOUT", "30"))
-        self.headless = os.getenv("BROWSER_HEADLESS", "true").lower() == "true"
+        self.browser_timeout = int(os.getenv("BROWSER_TIMEOUT", "60"))
+        self.headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
         self.window_size = os.getenv("BROWSER_WINDOW_SIZE", "1920x1080")
         self.auth_cache = {}
         self.cache_ttl = int(os.getenv("AUTH_CACHE_TTL", "3600"))
@@ -97,7 +97,12 @@ class AuthHandler:
             "access denied",
             "login required",
             "session expired",
-            "please authenticate"
+            "please authenticate",
+            "sign in to continue",
+            "membership required",
+            "subscription required",
+            "premium content",
+            "member login"
         ]
         
         return any(indicator in content_lower for indicator in auth_indicators)
