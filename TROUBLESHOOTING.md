@@ -72,6 +72,29 @@ which python
 chmod +x /Users/ablagodarenko/web-auth-mcp/venv/bin/python
 ```
 
+### Issue: "user data directory is already in use" ⭐ **FIXED**
+
+**Error message:**
+```
+session not created: probably user data directory is already in use,
+please specify a unique value for --user-data-dir argument
+```
+
+**Cause:** Chrome is already running and using the profile directory.
+
+**Solution:** This is now handled automatically:
+- System detects running Chrome processes
+- Creates temporary copy of profile data
+- Falls back to fresh profile if needed
+- Preserves password manager functionality
+
+**Manual fix if needed:**
+```bash
+# Close all Chrome windows and try again
+pkill -f "Google Chrome"
+# Or just let the system handle it automatically
+```
+
 ### Issue: "Server not responding"
 
 **Solution:** Restart Claude Desktop after changing the configuration.

@@ -26,12 +26,14 @@ class AuthHandler:
     """Handles authentication detection and browser-based authentication flows."""
     
     def __init__(self):
-        self.browser_timeout = int(os.getenv("BROWSER_TIMEOUT", "60"))
+        self.browser_timeout = int(os.getenv("BROWSER_TIMEOUT", "300"))  # Increased to 5 minutes
         self.headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
         self.window_size = os.getenv("BROWSER_WINDOW_SIZE", "1920x1080")
         self.use_default_profile = os.getenv("BROWSER_USE_DEFAULT_PROFILE", "false").lower() == "true"
         self.enable_password_manager = os.getenv("BROWSER_ENABLE_PASSWORD_MANAGER", "true").lower() == "true"
         self.auto_fill_passwords = os.getenv("BROWSER_AUTO_FILL_PASSWORDS", "true").lower() == "true"
+        self.auth_wait_time = int(os.getenv("AUTH_WAIT_TIME", "10"))  # Wait time for autofill
+        self.manual_auth_timeout = int(os.getenv("MANUAL_AUTH_TIMEOUT", "180"))  # 3 minutes for manual auth
         self.auth_cache = {}
         self.cache_ttl = int(os.getenv("AUTH_CACHE_TTL", "3600"))
     
@@ -132,7 +134,14 @@ class AuthHandler:
                 return cached_data
         
         logger.info(f"Starting browser authentication for {domain}")
-        
+
+        # Check if Chrome is running and warn user
+        if self.use_default_profile and self._check_chrome_running():
+            logger.warning("Chrome is currently running. This may cause profile conflicts.")
+            logger.info("If you encounter 'user data directory is already in use' errors:")
+            logger.info("1. Close all Chrome windows and try again, or")
+            logger.info("2. The system will automatically fall back to a temporary profile")
+
         # Set up Chrome options
         chrome_options = Options()
         if self.headless:
@@ -161,38 +170,124 @@ class AuthHandler:
                     "credentials_enable_autosignin": True,
                 })
 
-        # Use default Chrome profile if requested
+        # Configure Chrome profile with better conflict handling
         if self.use_default_profile:
             import platform
             import os.path
+            import tempfile
+            import shutil
 
             system = platform.system()
             if system == "Darwin":  # macOS
-                profile_path = os.path.expanduser("~/Library/Application Support/Google/Chrome/Default")
+                base_profile_path = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+                profile_dir = "Default"
             elif system == "Windows":
-                profile_path = os.path.expanduser("~/AppData/Local/Google/Chrome/User Data/Default")
+                base_profile_path = os.path.expanduser("~/AppData/Local/Google/Chrome/User Data")
+                profile_dir = "Default"
             else:  # Linux
-                profile_path = os.path.expanduser("~/.config/google-chrome/Default")
+                base_profile_path = os.path.expanduser("~/.config/google-chrome")
+                profile_dir = "Default"
 
-            if os.path.exists(profile_path):
-                chrome_options.add_argument(f"--user-data-dir={os.path.dirname(profile_path)}")
-                chrome_options.add_argument("--profile-directory=Default")
-                logger.info(f"Using Chrome profile: {profile_path}")
+            original_profile = os.path.join(base_profile_path, profile_dir)
+
+            if os.path.exists(original_profile):
+                # Create a temporary copy of the profile to avoid conflicts
+                temp_base = tempfile.mkdtemp(prefix="chrome_auth_profile_")
+                temp_profile_dir = os.path.join(temp_base, "Default")
+
+                try:
+                    # Copy essential profile data (passwords, cookies, etc.)
+                    os.makedirs(temp_profile_dir, exist_ok=True)
+
+                    # Copy key files for password manager and cookies
+                    key_files = [
+                        "Login Data", "Login Data-journal",
+                        "Cookies", "Cookies-journal",
+                        "Web Data", "Web Data-journal",
+                        "Preferences", "Local State"
+                    ]
+
+                    for file_name in key_files:
+                        src_file = os.path.join(original_profile, file_name)
+                        dst_file = os.path.join(temp_profile_dir, file_name)
+                        if os.path.exists(src_file):
+                            try:
+                                if os.path.isfile(src_file):
+                                    shutil.copy2(src_file, dst_file)
+                                else:
+                                    shutil.copytree(src_file, dst_file, dirs_exist_ok=True)
+                            except (PermissionError, OSError) as e:
+                                logger.debug(f"Could not copy {file_name}: {e}")
+
+                    chrome_options.add_argument(f"--user-data-dir={temp_base}")
+                    chrome_options.add_argument(f"--profile-directory=Default")
+                    logger.info(f"Using temporary copy of Chrome profile: {temp_base}")
+
+                except Exception as e:
+                    logger.warning(f"Could not copy profile data: {e}, using fresh temporary profile")
+                    chrome_options.add_argument(f"--user-data-dir={temp_base}")
             else:
-                logger.warning(f"Chrome profile not found at {profile_path}, using temporary profile")
+                logger.warning(f"Chrome profile not found at {original_profile}, using temporary profile")
+                temp_dir = tempfile.mkdtemp(prefix="chrome_auth_")
+                chrome_options.add_argument(f"--user-data-dir={temp_dir}")
         else:
             # Use a persistent temporary profile for password storage during session
             import tempfile
             temp_dir = tempfile.mkdtemp(prefix="chrome_auth_")
             chrome_options.add_argument(f"--user-data-dir={temp_dir}")
             logger.debug(f"Using temporary Chrome profile: {temp_dir}")
+
+        # Add additional options to avoid conflicts
+        chrome_options.add_argument("--no-first-run")
+        chrome_options.add_argument("--disable-default-apps")
+        chrome_options.add_argument("--disable-extensions-except")
+        chrome_options.add_argument("--disable-component-extensions-with-background-pages")
         
         driver = None
         try:
-            # Initialize WebDriver
+            # Initialize WebDriver with better error handling
             service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+            try:
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            except Exception as e:
+                if "user data directory is already in use" in str(e).lower():
+                    logger.warning("Chrome profile in use, trying with fresh temporary profile...")
+
+                    # Fall back to a completely fresh temporary profile
+                    import tempfile
+                    fresh_temp_dir = tempfile.mkdtemp(prefix="chrome_auth_fresh_")
+
+                    # Create new options with fresh profile
+                    fresh_options = Options()
+                    if self.headless:
+                        fresh_options.add_argument("--headless")
+                    fresh_options.add_argument("--no-sandbox")
+                    fresh_options.add_argument("--disable-dev-shm-usage")
+                    fresh_options.add_argument(f"--window-size={self.window_size}")
+                    fresh_options.add_argument("--disable-blink-features=AutomationControlled")
+                    fresh_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                    fresh_options.add_experimental_option('useAutomationExtension', False)
+                    fresh_options.add_argument(f"--user-data-dir={fresh_temp_dir}")
+                    fresh_options.add_argument("--no-first-run")
+                    fresh_options.add_argument("--disable-default-apps")
+
+                    # Configure password manager for fresh profile
+                    if self.enable_password_manager and self.auto_fill_passwords:
+                        fresh_options.add_experimental_option("prefs", {
+                            "profile.password_manager_enabled": True,
+                            "profile.default_content_setting_values.notifications": 2,
+                            "autofill.profile_enabled": True,
+                            "credentials_enable_service": True,
+                            "credentials_enable_autosignin": True,
+                        })
+
+                    driver = webdriver.Chrome(service=service, options=fresh_options)
+                    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                    logger.info(f"Using fresh temporary profile: {fresh_temp_dir}")
+                else:
+                    raise e
             
             # Navigate to the URL
             driver.get(url)
@@ -220,6 +315,35 @@ class AuthHandler:
             if driver:
                 driver.quit()
 
+    def _check_chrome_running(self) -> bool:
+        """
+        Check if Chrome is currently running using system commands.
+
+        Returns:
+            True if Chrome processes are detected
+        """
+        try:
+            import subprocess
+            import platform
+
+            system = platform.system()
+            if system == "Darwin":  # macOS
+                result = subprocess.run(['pgrep', '-f', 'Google Chrome'],
+                                      capture_output=True, text=True)
+                return result.returncode == 0
+            elif system == "Linux":
+                result = subprocess.run(['pgrep', '-f', 'chrome'],
+                                      capture_output=True, text=True)
+                return result.returncode == 0
+            elif system == "Windows":
+                result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq chrome.exe'],
+                                      capture_output=True, text=True)
+                return 'chrome.exe' in result.stdout.lower()
+        except Exception as e:
+            logger.debug(f"Error checking for Chrome processes: {e}")
+
+        return False
+
     async def _attempt_auto_login(self, driver: webdriver.Chrome) -> bool:
         """
         Attempt to automatically fill and submit login forms using saved passwords.
@@ -231,8 +355,9 @@ class AuthHandler:
             True if auto-login was attempted, False otherwise
         """
         try:
-            # Wait a moment for the page to load
-            await asyncio.sleep(2)
+            # Wait longer for the page to load completely
+            logger.info("Waiting for page to load completely...")
+            await asyncio.sleep(5)
 
             # Look for common login form patterns
             login_selectors = [
@@ -284,15 +409,21 @@ class AuthHandler:
 
                 # Click on username field to trigger Chrome's autofill
                 username_field.click()
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
 
                 # Try to trigger autofill by simulating user interaction
                 driver.execute_script("arguments[0].focus();", username_field)
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
+
+                # Give Chrome more time to autofill
+                logger.info(f"Waiting {self.auth_wait_time} seconds for Chrome autofill...")
+                await asyncio.sleep(self.auth_wait_time)
 
                 # Check if Chrome has filled the fields
                 username_value = username_field.get_attribute('value')
                 password_value = password_field.get_attribute('value')
+
+                logger.info(f"Autofill check - Username: {'✅' if username_value else '❌'}, Password: {'✅' if password_value else '❌'}")
 
                 if username_value and password_value:
                     logger.info("Chrome autofill detected credentials, looking for submit button...")
@@ -360,10 +491,16 @@ class AuthHandler:
         try:
             # If not headless, show message to user
             if not self.headless:
-                print(f"\n🔐 Please complete authentication in the browser window.")
+                print(f"\n🔐 Authentication Required")
                 print(f"   Original URL: {original_url}")
                 print(f"   Current URL: {driver.current_url}")
-                print(f"   Waiting up to {self.browser_timeout} seconds...\n")
+                print(f"   Browser timeout: {self.browser_timeout} seconds")
+                print(f"   Manual auth timeout: {self.manual_auth_timeout} seconds")
+                print(f"\n💡 What to do:")
+                print(f"   1. If you have saved passwords: Wait for Chrome to autofill")
+                print(f"   2. If no autofill: Manually enter your credentials")
+                print(f"   3. The browser will stay open until authentication completes")
+                print(f"   4. Don't close the browser - it will close automatically\n")
             
             # Wait for authentication completion indicators
             auth_completed = False
@@ -371,7 +508,10 @@ class AuthHandler:
             last_url = driver.current_url
             stable_url_count = 0
 
-            while not auth_completed and (time.time() - start_time) < self.browser_timeout:
+            # Use different timeout for manual authentication
+            effective_timeout = self.manual_auth_timeout if not self.auto_fill_passwords else self.browser_timeout
+
+            while not auth_completed and (time.time() - start_time) < effective_timeout:
                 current_url = driver.current_url
 
                 # Check if URL has been stable (not changing)
@@ -380,22 +520,24 @@ class AuthHandler:
                 else:
                     stable_url_count = 0
                     last_url = current_url
+                    logger.info(f"URL changed to: {current_url}")
 
                 # Check multiple indicators for successful authentication
+                # Be more conservative - require more indicators to be sure
                 auth_indicators = [
                     # Not on a login page
                     not self._is_login_redirect(current_url),
-                    # URL has been stable for a few seconds
-                    stable_url_count >= 3,
+                    # URL has been stable for longer
+                    stable_url_count >= 5,  # Increased from 3 to 5
                     # Check for success indicators in page content
                     self._check_auth_success_indicators(driver),
                     # Check if we're on a content page (not login/error)
                     self._is_content_page(current_url)
                 ]
 
-                # If multiple indicators suggest success, verify by testing original URL
-                if sum(auth_indicators) >= 2:
-                    logger.debug("Authentication indicators suggest success, verifying...")
+                # Require more confidence before considering authentication complete
+                if sum(auth_indicators) >= 3:  # Increased threshold
+                    logger.info("Strong authentication indicators detected, verifying...")
 
                     # Test access to original URL in a new tab to avoid disrupting current session
                     original_window = driver.current_window_handle
@@ -404,7 +546,7 @@ class AuthHandler:
 
                     try:
                         driver.get(original_url)
-                        await asyncio.sleep(3)  # Wait for page load
+                        await asyncio.sleep(5)  # Wait longer for page load
 
                         test_url = driver.current_url
                         page_source = driver.page_source.lower()
@@ -414,7 +556,7 @@ class AuthHandler:
                             not self._is_login_redirect(test_url),
                             not self._contains_auth_indicators(page_source),
                             len(page_source) > 1000,  # Substantial content
-                            "content" in page_source or "article" in page_source
+                            "content" in page_source or "article" in page_source or "search" in page_source
                         ]
 
                         if sum(success_indicators) >= 3:
@@ -422,7 +564,8 @@ class AuthHandler:
                             logger.info("Authentication verification successful")
                             break
                         else:
-                            logger.debug("Authentication verification failed, continuing to wait")
+                            logger.info("Authentication verification failed, continuing to wait...")
+                            logger.debug(f"Success indicators: {sum(success_indicators)}/4")
 
                     except Exception as e:
                         logger.debug(f"Error during authentication verification: {e}")
@@ -431,7 +574,13 @@ class AuthHandler:
                         driver.close()
                         driver.switch_to.window(original_window)
 
-                await asyncio.sleep(1)
+                # Show progress every 30 seconds
+                elapsed = time.time() - start_time
+                if int(elapsed) % 30 == 0 and int(elapsed) > 0:
+                    remaining = effective_timeout - elapsed
+                    logger.info(f"Still waiting for authentication... {remaining:.0f} seconds remaining")
+
+                await asyncio.sleep(2)  # Check less frequently
             
             if not auth_completed:
                 logger.warning("Authentication timeout")

@@ -24,6 +24,11 @@ BROWSER_AUTO_FILL_PASSWORDS=true
 
 # Run browser in non-headless mode to see the process (recommended for password manager)
 BROWSER_HEADLESS=false
+
+# Authentication timing (NEW - fixes quick closing issue)
+BROWSER_TIMEOUT=300          # Total browser timeout (5 minutes)
+MANUAL_AUTH_TIMEOUT=180      # Time for manual authentication (3 minutes)
+AUTH_WAIT_TIME=10           # Wait time for Chrome autofill (10 seconds)
 ```
 
 ### Configuration Modes
@@ -143,20 +148,40 @@ This will test the complete authentication flow with a real website.
 
 ### Common Issues
 
-1. **Autofill Not Working**
+1. **Browser Closes Too Quickly** ⭐ **FIXED**
+   - **Problem**: Authentication window closes before you can enter credentials
+   - **Solution**: Updated timing configuration
+   - **Settings**:
+     ```bash
+     BROWSER_TIMEOUT=300          # 5 minutes total
+     MANUAL_AUTH_TIMEOUT=180      # 3 minutes for manual entry
+     AUTH_WAIT_TIME=10           # 10 seconds for autofill
+     ```
+
+2. **Autofill Not Working**
    - Ensure `BROWSER_ENABLE_PASSWORD_MANAGER=true`
    - Check that you have saved passwords for the site
    - Try using `BROWSER_USE_DEFAULT_PROFILE=true`
+   - Wait for the full autofill delay (10 seconds)
 
-2. **Form Not Submitting**
+3. **Form Not Submitting**
    - The system may not recognize the submit button
    - Manual submission will be required
    - Check browser console for JavaScript errors
 
-3. **Profile Access Issues**
-   - Close all Chrome instances before running
+4. **Chrome Profile Conflicts** ⭐ **FIXED**
+   - **Problem**: "user data directory is already in use" error
+   - **Cause**: Chrome already running while trying to use default profile
+   - **Solution**: Now handled automatically
+     - System detects running Chrome processes
+     - Creates temporary copy of profile data
+     - Falls back to fresh profile if needed
+     - Preserves all password manager functionality
+
+5. **Profile Access Issues**
    - Check Chrome profile path permissions
    - Try temporary profile mode first
+   - System now handles most conflicts automatically
 
 ### Debug Mode
 

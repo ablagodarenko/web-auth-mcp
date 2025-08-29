@@ -6,9 +6,12 @@
       "cwd": "/Users/ablagodarenko/web-auth-mcp",
       "env": {
         "BROWSER_HEADLESS": "false",
+        "BROWSER_TIMEOUT": "300",
         "BROWSER_USE_DEFAULT_PROFILE": "true",
         "BROWSER_ENABLE_PASSWORD_MANAGER": "true",
         "BROWSER_AUTO_FILL_PASSWORDS": "true",
+        "AUTH_WAIT_TIME": "10",
+        "MANUAL_AUTH_TIMEOUT": "180",
         "SUPPRESS_MCP_WARNINGS": "true",
         "LOG_LEVEL": "INFO"
       }

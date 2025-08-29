@@ -127,6 +127,15 @@ BROWSER_AUTO_FILL_PASSWORDS=true
 # Authentication configuration
 AUTH_CACHE_TTL=3600
 AUTH_RETRY_ATTEMPTS=3
+
+# Authentication timing (fixes quick closing issue)
+BROWSER_TIMEOUT=300
+MANUAL_AUTH_TIMEOUT=180
+AUTH_WAIT_TIME=10
+
+# Logging configuration
+LOG_LEVEL=INFO
+SUPPRESS_MCP_WARNINGS=true
 ```
 
 ## Chrome Password Manager Integration
