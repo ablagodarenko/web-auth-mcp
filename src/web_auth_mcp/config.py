@@ -11,6 +11,9 @@ class BrowserConfig(BaseModel):
     headless: bool = Field(default=True, description="Run browser in headless mode")
     timeout: int = Field(default=30, description="Browser timeout in seconds")
     window_size: str = Field(default="1920x1080", description="Browser window size")
+    use_default_profile: bool = Field(default=False, description="Use system Chrome profile with saved passwords")
+    enable_password_manager: bool = Field(default=True, description="Enable Chrome password manager features")
+    auto_fill_passwords: bool = Field(default=True, description="Automatically fill login forms with saved passwords")
 
 
 class AuthConfig(BaseModel):
@@ -59,7 +62,10 @@ def load_config() -> ServerConfig:
         browser=BrowserConfig(
             headless=os.getenv("BROWSER_HEADLESS", "true").lower() == "true",
             timeout=int(os.getenv("BROWSER_TIMEOUT", "30")),
-            window_size=os.getenv("BROWSER_WINDOW_SIZE", "1920x1080")
+            window_size=os.getenv("BROWSER_WINDOW_SIZE", "1920x1080"),
+            use_default_profile=os.getenv("BROWSER_USE_DEFAULT_PROFILE", "false").lower() == "true",
+            enable_password_manager=os.getenv("BROWSER_ENABLE_PASSWORD_MANAGER", "true").lower() == "true",
+            auto_fill_passwords=os.getenv("BROWSER_AUTO_FILL_PASSWORDS", "true").lower() == "true"
         ),
         auth=AuthConfig(
             cache_ttl=int(os.getenv("AUTH_CACHE_TTL", "3600")),

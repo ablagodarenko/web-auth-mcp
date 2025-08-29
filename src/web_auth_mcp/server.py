@@ -188,18 +188,22 @@ class WebAuthMCPServer:
         logger.info("Starting Web Auth MCP Server (stdio)")
 
         async with stdio_server() as (read_stream, write_stream):
-            await self.server.run(
-                read_stream,
-                write_stream,
-                InitializationOptions(
-                    server_name="web-auth-mcp",
-                    server_version="0.1.0",
-                    capabilities=self.server.get_capabilities(
-                        notification_options=NotificationOptions(),
-                        experimental_capabilities=None,
+            try:
+                await self.server.run(
+                    read_stream,
+                    write_stream,
+                    InitializationOptions(
+                        server_name="web-auth-mcp",
+                        server_version="0.1.0",
+                        capabilities=self.server.get_capabilities(
+                            notification_options=NotificationOptions(),
+                            experimental_capabilities=None,
+                        ),
                     ),
-                ),
-            )
+                )
+            except Exception as e:
+                logger.error(f"Server error: {e}")
+                raise
 
     def create_sse_app(self):
         """Create Starlette app for SSE transport."""
@@ -213,23 +217,49 @@ class WebAuthMCPServer:
 
                 if path == "/sse":
                     # Handle SSE endpoint
-                    async with transport.connect_sse(
-                        scope, receive, send
-                    ) as streams:
-                        await self.server.run(
-                            *streams,
-                            InitializationOptions(
-                                server_name="web-auth-mcp",
-                                server_version="0.1.0",
-                                capabilities=self.server.get_capabilities(
-                                    notification_options=NotificationOptions(),
-                                    experimental_capabilities=None,
-                                ),
+                    try:
+                        async with transport.connect_sse(
+                            scope, receive, send
+                        ) as streams:
+                            await self.server.run(
+                                *streams,
+                                InitializationOptions(
+                                    server_name="web-auth-mcp",
+                                    server_version="0.1.0",
+                                    capabilities=self.server.get_capabilities(
+                                        notification_options=NotificationOptions(),
+                                        experimental_capabilities=None,
+                                    ),
+                                )
                             )
-                        )
+                    except Exception as e:
+                        logger.error(f"SSE transport error: {e}")
+                        # Send error response
+                        await send({
+                            'type': 'http.response.start',
+                            'status': 500,
+                            'headers': [[b'content-type', b'text/plain']],
+                        })
+                        await send({
+                            'type': 'http.response.body',
+                            'body': f'Server Error: {str(e)}'.encode(),
+                        })
                 elif path == "/message":
                     # Handle message endpoint
-                    await transport.handle_post_message(scope, receive, send)
+                    try:
+                        await transport.handle_post_message(scope, receive, send)
+                    except Exception as e:
+                        logger.error(f"Message endpoint error: {e}")
+                        # Send error response
+                        await send({
+                            'type': 'http.response.start',
+                            'status': 500,
+                            'headers': [[b'content-type', b'application/json']],
+                        })
+                        await send({
+                            'type': 'http.response.body',
+                            'body': json.dumps({"error": str(e)}).encode(),
+                        })
                 else:
                     # 404 for other paths
                     await send({

@@ -7,8 +7,11 @@ An MCP (Model Context Protocol) server that handles HTTP requests with automatic
 - Execute HTTP requests through MCP tools
 - Automatic detection of authentication requirements
 - Browser-based authentication for OAuth flows and login forms
+- **Chrome password manager integration** - automatically use saved passwords
+- **Automatic form filling and submission** - streamlined login process
 - Retry requests with captured authentication credentials
 - Support for cookies, tokens, and session management
+- Configurable browser profiles (system or temporary)
 
 ## Installation
 
@@ -111,10 +114,85 @@ python example_usage.py
 Create a `.env` file with optional configuration:
 
 ```
+# Browser configuration
 BROWSER_HEADLESS=false
 BROWSER_TIMEOUT=60
+BROWSER_WINDOW_SIZE=1920x1080
+
+# Chrome Password Manager (NEW!)
+BROWSER_USE_DEFAULT_PROFILE=false
+BROWSER_ENABLE_PASSWORD_MANAGER=true
+BROWSER_AUTO_FILL_PASSWORDS=true
+
+# Authentication configuration
 AUTH_CACHE_TTL=3600
+AUTH_RETRY_ATTEMPTS=3
 ```
+
+## Chrome Password Manager Integration
+
+The server now supports using Chrome's saved passwords for automatic authentication:
+
+### Quick Start
+
+1. **Enable password manager features:**
+   ```bash
+   export BROWSER_ENABLE_PASSWORD_MANAGER=true
+   export BROWSER_AUTO_FILL_PASSWORDS=true
+   export BROWSER_HEADLESS=false
+   ```
+
+2. **Choose profile mode:**
+   - **System Profile** (access to all saved passwords):
+     ```bash
+     export BROWSER_USE_DEFAULT_PROFILE=true
+     ```
+   - **Temporary Profile** (session-only passwords):
+     ```bash
+     export BROWSER_USE_DEFAULT_PROFILE=false
+     ```
+
+3. **Test the functionality:**
+   ```bash
+   python test_password_manager.py
+   python example_password_manager.py
+   ```
+
+### How It Works
+
+1. **Automatic Detection**: Detects login forms on web pages
+2. **Chrome Autofill**: Triggers Chrome's built-in password autofill
+3. **Form Submission**: Automatically submits forms when credentials are found
+4. **Fallback**: Manual interaction available if auto-fill fails
+
+### Supported Login Forms
+
+- Standard HTML login forms
+- Email/username + password combinations
+- Common form field patterns and selectors
+- Various submit button types
+
+For detailed documentation, see [CHROME_PASSWORD_MANAGER.md](CHROME_PASSWORD_MANAGER.md).
+
+## Troubleshooting
+
+### MCP Initialization Warnings
+
+You may see warnings like:
+```
+WARNING - Failed to validate request: Received request before initialization was complete
+```
+
+**This is normal MCP protocol behavior** and doesn't affect functionality. These warnings occur during the client-server handshake when requests are received before initialization completes.
+
+**To suppress these warnings:**
+```bash
+export SUPPRESS_MCP_WARNINGS=true
+# or add to your .env file:
+echo "SUPPRESS_MCP_WARNINGS=true" >> .env
+```
+
+The server will continue to function correctly regardless of these warnings.
 
 ## Tools
 

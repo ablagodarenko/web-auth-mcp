@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "web-auth-mcp": {
+      "command": "/Users/ablagodarenko/web-auth-mcp/venv/bin/python",
+      "args": ["-m", "web_auth_mcp.server"],
+      "cwd": "/Users/ablagodarenko/web-auth-mcp",
+      "env": {
+        "BROWSER_HEADLESS": "false",
+        "BROWSER_USE_DEFAULT_PROFILE": "true",
+        "BROWSER_ENABLE_PASSWORD_MANAGER": "true",
+        "BROWSER_AUTO_FILL_PASSWORDS": "true",
+        "SUPPRESS_MCP_WARNINGS": "true",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}

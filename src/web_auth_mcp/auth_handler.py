@@ -14,6 +14,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
@@ -28,6 +29,9 @@ class AuthHandler:
         self.browser_timeout = int(os.getenv("BROWSER_TIMEOUT", "60"))
         self.headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
         self.window_size = os.getenv("BROWSER_WINDOW_SIZE", "1920x1080")
+        self.use_default_profile = os.getenv("BROWSER_USE_DEFAULT_PROFILE", "false").lower() == "true"
+        self.enable_password_manager = os.getenv("BROWSER_ENABLE_PASSWORD_MANAGER", "true").lower() == "true"
+        self.auto_fill_passwords = os.getenv("BROWSER_AUTO_FILL_PASSWORDS", "true").lower() == "true"
         self.auth_cache = {}
         self.cache_ttl = int(os.getenv("AUTH_CACHE_TTL", "3600"))
     
@@ -139,6 +143,49 @@ class AuthHandler:
         chrome_options.add_argument("--disable-blink-features=AutomationControlled")
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
+
+        # Configure password manager and autofill
+        if self.enable_password_manager:
+            # Enable password manager features
+            chrome_options.add_argument("--enable-password-manager-reauthentication")
+            chrome_options.add_argument("--password-store=basic")
+
+            # Enable autofill if requested
+            if self.auto_fill_passwords:
+                chrome_options.add_experimental_option("prefs", {
+                    "profile.password_manager_enabled": True,
+                    "profile.default_content_setting_values.notifications": 2,  # Block notifications
+                    "autofill.profile_enabled": True,
+                    "autofill.credit_card_enabled": True,
+                    "credentials_enable_service": True,
+                    "credentials_enable_autosignin": True,
+                })
+
+        # Use default Chrome profile if requested
+        if self.use_default_profile:
+            import platform
+            import os.path
+
+            system = platform.system()
+            if system == "Darwin":  # macOS
+                profile_path = os.path.expanduser("~/Library/Application Support/Google/Chrome/Default")
+            elif system == "Windows":
+                profile_path = os.path.expanduser("~/AppData/Local/Google/Chrome/User Data/Default")
+            else:  # Linux
+                profile_path = os.path.expanduser("~/.config/google-chrome/Default")
+
+            if os.path.exists(profile_path):
+                chrome_options.add_argument(f"--user-data-dir={os.path.dirname(profile_path)}")
+                chrome_options.add_argument("--profile-directory=Default")
+                logger.info(f"Using Chrome profile: {profile_path}")
+            else:
+                logger.warning(f"Chrome profile not found at {profile_path}, using temporary profile")
+        else:
+            # Use a persistent temporary profile for password storage during session
+            import tempfile
+            temp_dir = tempfile.mkdtemp(prefix="chrome_auth_")
+            chrome_options.add_argument(f"--user-data-dir={temp_dir}")
+            logger.debug(f"Using temporary Chrome profile: {temp_dir}")
         
         driver = None
         try:
@@ -149,7 +196,11 @@ class AuthHandler:
             
             # Navigate to the URL
             driver.get(url)
-            
+
+            # Try to auto-fill login forms if enabled
+            if self.auto_fill_passwords:
+                await self._attempt_auto_login(driver)
+
             # Wait for user to complete authentication
             auth_data = await self._wait_for_authentication(driver, url)
             
@@ -168,7 +219,127 @@ class AuthHandler:
         finally:
             if driver:
                 driver.quit()
-    
+
+    async def _attempt_auto_login(self, driver: webdriver.Chrome) -> bool:
+        """
+        Attempt to automatically fill and submit login forms using saved passwords.
+
+        Args:
+            driver: WebDriver instance
+
+        Returns:
+            True if auto-login was attempted, False otherwise
+        """
+        try:
+            # Wait a moment for the page to load
+            await asyncio.sleep(2)
+
+            # Look for common login form patterns
+            login_selectors = [
+                # Username/email fields
+                'input[type="email"]',
+                'input[type="text"][name*="user"]',
+                'input[type="text"][name*="email"]',
+                'input[type="text"][name*="login"]',
+                'input[id*="user"]',
+                'input[id*="email"]',
+                'input[id*="login"]',
+                'input[name="username"]',
+                'input[name="email"]',
+                'input[class*="username"]',
+                'input[class*="email"]'
+            ]
+
+            password_selectors = [
+                'input[type="password"]',
+                'input[name="password"]',
+                'input[id*="password"]',
+                'input[class*="password"]'
+            ]
+
+            # Find username/email field
+            username_field = None
+            for selector in login_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements and elements[0].is_displayed():
+                        username_field = elements[0]
+                        break
+                except:
+                    continue
+
+            # Find password field
+            password_field = None
+            for selector in password_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements and elements[0].is_displayed():
+                        password_field = elements[0]
+                        break
+                except:
+                    continue
+
+            if username_field and password_field:
+                logger.info("Found login form, triggering autofill...")
+
+                # Click on username field to trigger Chrome's autofill
+                username_field.click()
+                await asyncio.sleep(1)
+
+                # Try to trigger autofill by simulating user interaction
+                driver.execute_script("arguments[0].focus();", username_field)
+                await asyncio.sleep(1)
+
+                # Check if Chrome has filled the fields
+                username_value = username_field.get_attribute('value')
+                password_value = password_field.get_attribute('value')
+
+                if username_value and password_value:
+                    logger.info("Chrome autofill detected credentials, looking for submit button...")
+
+                    # Look for submit button
+                    submit_selectors = [
+                        'button[type="submit"]',
+                        'input[type="submit"]',
+                        'button[name*="login"]',
+                        'button[id*="login"]',
+                        'button[class*="login"]',
+                        'button[class*="submit"]',
+                        'button:contains("Sign in")',
+                        'button:contains("Log in")',
+                        'button:contains("Login")'
+                    ]
+
+                    for selector in submit_selectors:
+                        try:
+                            submit_button = driver.find_element(By.CSS_SELECTOR, selector)
+                            if submit_button.is_displayed() and submit_button.is_enabled():
+                                logger.info("Submitting login form automatically...")
+                                submit_button.click()
+                                await asyncio.sleep(3)  # Wait for submission
+                                return True
+                        except:
+                            continue
+
+                    # If no submit button found, try pressing Enter on password field
+                    try:
+                        password_field.send_keys(Keys.RETURN)
+                        await asyncio.sleep(3)
+                        logger.info("Submitted login form using Enter key")
+                        return True
+                    except:
+                        pass
+                else:
+                    logger.debug("Chrome autofill did not populate credentials")
+            else:
+                logger.debug("No login form detected on page")
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"Auto-login attempt failed: {e}")
+            return False
+
     async def _wait_for_authentication(
         self, 
         driver: webdriver.Chrome, 
